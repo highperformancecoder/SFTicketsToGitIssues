@@ -156,7 +156,7 @@ class GitHubIssuesCreator:
             return issue
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Error creating issue: {e}")
-            if hasattr(e.response, 'text'):
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 self.logger.error(f"Response: {e.response.text}")
             return None
     
@@ -407,7 +407,7 @@ Examples:
     
     logger.info(f"Migration completed: {success_count} tickets migrated")
     
-    return 0 if success_count > 0 else 1
+    return 0
 
 
 if __name__ == "__main__":

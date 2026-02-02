@@ -15,7 +15,7 @@ Python script to automate the migration of SourceForge tickets to GitHub Issues.
 
 ## Requirements
 
-- Python 3.6 or higher
+- Python 3.8 or higher
 - GitHub personal access token with `repo` permissions
 - SourceForge project with accessible tickets
 
