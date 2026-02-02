@@ -1,0 +1,7 @@
+{
+  "sf_project": "your-sourceforge-project",
+  "sf_tracker": "bugs",
+  "gh_owner": "your-github-username",
+  "gh_repo": "your-repository-name",
+  "gh_token": "your-github-personal-access-token"
+}
