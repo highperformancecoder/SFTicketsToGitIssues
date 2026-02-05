@@ -335,7 +335,8 @@ class TicketMigrator:
             if ticket_num != "unknown":
                 self.logger.debug(f"Fetching detailed information for ticket #{ticket_num}")
                 detailed_ticket = self.sf_fetcher.fetch_ticket_details(ticket_num)
-                time.sleep(1)  # Rate limiting for detail fetch
+                if detailed_ticket:
+                    time.sleep(1)  # Rate limiting for detail fetch
             
             # Convert ticket to issue format
             issue_data = self.convert_ticket_to_issue(ticket, detailed_ticket)
@@ -361,10 +362,8 @@ class TicketMigrator:
                     if comments and issue_number:
                         self.logger.info(f"Adding {len(comments)} comments to issue #{issue_number}")
                         for comment in comments:
-                            if self.gh_creator.add_comment(issue_number, comment):
-                                time.sleep(1)  # Rate limiting for comments
-                            else:
-                                self.logger.warning(f"Failed to add a comment to issue #{issue_number}")
+                            self.gh_creator.add_comment(issue_number, comment)
+                            time.sleep(1)  # Rate limiting for comments
                     
                     success_count += 1
                     # Rate limiting
