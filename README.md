@@ -7,6 +7,8 @@ Python script to automate the migration of SourceForge tickets to GitHub Issues.
 - Fetches tickets from SourceForge projects using the REST API
 - Creates corresponding issues in GitHub repositories
 - Preserves original ticket metadata (reporter, dates, status)
+- **Migrates discussion threads and comments as GitHub issue comments**
+- **Includes attachments with links to original SourceForge files**
 - Supports filtering by ticket status (open, closed, or all)
 - Includes dry-run mode for testing
 - Configurable via command-line arguments or JSON config file
@@ -124,14 +126,19 @@ python sf_tickets_to_github.py --config config.json --verbose
 
 1. **Fetching Tickets**: The script uses the SourceForge REST API to fetch tickets from the specified project and tracker.
 
-2. **Converting Format**: Each SourceForge ticket is converted to GitHub issue format:
+2. **Fetching Details**: For each ticket, the script fetches detailed information including discussion threads and attachments.
+
+3. **Converting Format**: Each SourceForge ticket is converted to GitHub issue format:
    - Title: `[SF#<ticket_num>] <original_summary>`
-   - Body: Contains metadata (reporter, dates, status) and original description
+   - Body: Contains metadata (reporter, dates, status), original description, and attachment links
    - Labels: Automatically tagged with `migrated-from-sourceforge` and status labels
+   - Comments: Discussion thread posts are added as GitHub issue comments
 
-3. **Creating Issues**: Issues are created in the GitHub repository using the GitHub API.
+4. **Creating Issues**: Issues are created in the GitHub repository using the GitHub API.
 
-4. **Rate Limiting**: The script includes delays between API calls to respect rate limits.
+5. **Adding Comments**: Each comment from the SourceForge discussion thread is added to the GitHub issue with attribution.
+
+6. **Rate Limiting**: The script includes delays between API calls to respect rate limits.
 
 ## GitHub Token Permissions
 
@@ -146,8 +153,7 @@ To create a token:
 
 ## Limitations
 
-- Comments on SourceForge tickets are not currently migrated
-- Attachments are not migrated (SourceForge API limitations)
+- Attachment files themselves are not uploaded to GitHub (only links to SourceForge are provided due to API limitations)
 - The script does not close GitHub issues based on SourceForge ticket status (they are created as open)
 - Rate limits apply to both SourceForge and GitHub APIs
 

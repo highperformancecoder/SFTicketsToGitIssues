@@ -204,15 +204,16 @@ class TicketMigrator:
         self.gh_creator = GitHubIssuesCreator(gh_owner, gh_repo, gh_token)
         self.logger = logging.getLogger(__name__)
     
-    def convert_ticket_to_issue(self, ticket: Dict) -> Dict:
+    def convert_ticket_to_issue(self, ticket: Dict, detailed_ticket: Optional[Dict] = None) -> Dict:
         """
         Convert a SourceForge ticket to GitHub issue format.
         
         Args:
-            ticket: SourceForge ticket dictionary
+            ticket: SourceForge ticket dictionary (basic info)
+            detailed_ticket: Full ticket details including discussion and attachments
             
         Returns:
-            Dictionary with GitHub issue data
+            Dictionary with GitHub issue data including comments
         """
         ticket_num = ticket.get("ticket_num", "")
         summary = ticket.get("summary", "No summary")
@@ -236,8 +237,34 @@ class TicketMigrator:
             "",
             "---",
             "",
+            "## Description",
+            "",
             description if description else "*(No description provided)*"
         ]
+        
+        # Add attachments section if available
+        attachments = []
+        if detailed_ticket:
+            ticket_data = detailed_ticket.get("ticket", {})
+            attachments = ticket_data.get("attachments", [])
+            
+            if attachments:
+                body_parts.extend([
+                    "",
+                    "---",
+                    "",
+                    "## Attachments",
+                    ""
+                ])
+                for att in attachments:
+                    filename = att.get("filename", "unknown")
+                    url = att.get("url", "")
+                    if url:
+                        # Build full URL for attachment
+                        full_url = f"https://sourceforge.net{url}"
+                        body_parts.append(f"- [{filename}]({full_url})")
+                    else:
+                        body_parts.append(f"- {filename}")
         
         body = "\n".join(body_parts)
         
@@ -246,10 +273,32 @@ class TicketMigrator:
         if status:
             labels.append(f"sf-status-{status}")
         
+        # Extract comments from discussion thread
+        comments = []
+        if detailed_ticket:
+            ticket_data = detailed_ticket.get("ticket", {})
+            discussion_thread = ticket_data.get("discussion_thread", {})
+            posts = discussion_thread.get("posts", [])
+            
+            for post in posts:
+                author = post.get("author", "unknown")
+                timestamp = post.get("timestamp", "")
+                text = post.get("text", "")
+                
+                if text:  # Only add non-empty comments
+                    comment_parts = [
+                        f"**Comment by {author}** *(SourceForge)*",
+                        f"**Date:** {timestamp}",
+                        "",
+                        text
+                    ]
+                    comments.append("\n".join(comment_parts))
+        
         return {
             "title": title,
             "body": body,
-            "labels": labels
+            "labels": labels,
+            "comments": comments
         }
     
     def migrate_tickets(self, status: str = "open", limit: Optional[int] = None, 
@@ -281,11 +330,20 @@ class TicketMigrator:
             ticket_num = ticket.get("ticket_num", "unknown")
             self.logger.info(f"Processing ticket {i}/{len(tickets)}: #{ticket_num}")
             
+            # Fetch detailed ticket information
+            detailed_ticket = None
+            if ticket_num != "unknown":
+                self.logger.debug(f"Fetching detailed information for ticket #{ticket_num}")
+                detailed_ticket = self.sf_fetcher.fetch_ticket_details(ticket_num)
+                time.sleep(1)  # Rate limiting for detail fetch
+            
             # Convert ticket to issue format
-            issue_data = self.convert_ticket_to_issue(ticket)
+            issue_data = self.convert_ticket_to_issue(ticket, detailed_ticket)
             
             if dry_run:
                 self.logger.info(f"[DRY RUN] Would create issue: {issue_data['title']}")
+                if issue_data.get("comments"):
+                    self.logger.info(f"[DRY RUN] Would add {len(issue_data['comments'])} comments")
                 success_count += 1
             else:
                 # Create the issue
@@ -296,6 +354,18 @@ class TicketMigrator:
                 )
                 
                 if issue:
+                    issue_number = issue.get("number")
+                    
+                    # Add comments if any
+                    comments = issue_data.get("comments", [])
+                    if comments and issue_number:
+                        self.logger.info(f"Adding {len(comments)} comments to issue #{issue_number}")
+                        for comment in comments:
+                            if self.gh_creator.add_comment(issue_number, comment):
+                                time.sleep(1)  # Rate limiting for comments
+                            else:
+                                self.logger.warning(f"Failed to add a comment to issue #{issue_number}")
+                    
                     success_count += 1
                     # Rate limiting
                     time.sleep(2)
