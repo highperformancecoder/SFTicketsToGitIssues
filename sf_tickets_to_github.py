@@ -342,7 +342,7 @@ Examples:
     
     # SourceForge options
     parser.add_argument("--sf-project", help="SourceForge project name")
-    parser.add_argument("--sf-tracker", default="bugs", help="SourceForge tracker name (default: bugs)")
+    parser.add_argument("--sf-tracker", help="SourceForge tracker name (default: bugs)")
     
     # GitHub options
     parser.add_argument("--gh-owner", help="GitHub repository owner")
