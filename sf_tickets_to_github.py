@@ -215,6 +215,9 @@ class TicketMigrator:
         Returns:
             Dictionary with GitHub issue data including comments
         """
+        # Extract detailed ticket data once if available
+        detailed_data = detailed_ticket.get("ticket", {}) if detailed_ticket else {}
+        
         ticket_num = ticket.get("ticket_num", "")
         summary = ticket.get("summary", "No summary")
         status = ticket.get("status", "")
@@ -224,10 +227,7 @@ class TicketMigrator:
         
         # Get description from detailed ticket if available (it has the full text)
         # Otherwise fall back to basic ticket description
-        description = ticket.get("description", "")
-        if detailed_ticket:
-            ticket_data = detailed_ticket.get("ticket", {})
-            description = ticket_data.get("description", description)
+        description = detailed_data.get("description") or ticket.get("description", "")
         
         # Build issue title
         title = f"[SF#{ticket_num}] {summary}"
@@ -249,35 +249,31 @@ class TicketMigrator:
         ]
         
         # Add attachments section if available
-        attachments = []
-        if detailed_ticket:
-            ticket_data = detailed_ticket.get("ticket", {})
-            attachments = ticket_data.get("attachments", [])
-            
-            if attachments:
-                body_parts.extend([
-                    "",
-                    "---",
-                    "",
-                    "## Attachments",
-                    ""
-                ])
-                for att in attachments:
-                    filename = att.get("filename", "unknown")
-                    url = att.get("url", "")
-                    if url:
-                        # Handle both full URLs and relative paths
-                        # SourceForge might return full URLs or paths starting with /
-                        if url.startswith("http://") or url.startswith("https://"):
-                            full_url = url
-                        elif url.startswith("/"):
-                            full_url = f"https://sourceforge.net{url}"
-                        else:
-                            # Relative path without leading slash
-                            full_url = f"https://sourceforge.net/{url}"
-                        body_parts.append(f"- [{filename}]({full_url})")
+        attachments = detailed_data.get("attachments", [])
+        if attachments:
+            body_parts.extend([
+                "",
+                "---",
+                "",
+                "## Attachments",
+                ""
+            ])
+            for att in attachments:
+                filename = att.get("filename", "unknown")
+                url = att.get("url", "")
+                if url:
+                    # Handle both full URLs and relative paths
+                    # SourceForge might return full URLs or paths starting with /
+                    if url.startswith("http://") or url.startswith("https://"):
+                        full_url = url
+                    elif url.startswith("/"):
+                        full_url = f"https://sourceforge.net{url}"
                     else:
-                        body_parts.append(f"- {filename}")
+                        # Relative path without leading slash
+                        full_url = f"https://sourceforge.net/{url}"
+                    body_parts.append(f"- [{filename}]({full_url})")
+                else:
+                    body_parts.append(f"- {filename}")
         
         body = "\n".join(body_parts)
         
@@ -291,37 +287,33 @@ class TicketMigrator:
             labels.append(f"sf-status-{sanitized_status}")
         
         # Add SourceForge labels/tags if available
-        if detailed_ticket:
-            ticket_data = detailed_ticket.get("ticket", {})
-            sf_labels = ticket_data.get("labels", [])
-            if sf_labels:
-                # Add SF labels, sanitizing them for GitHub
-                for label in sf_labels:
-                    if label:
-                        # Sanitize label (lowercase, replace spaces with hyphens)
-                        sanitized_label = str(label).lower().replace(" ", "-")
-                        labels.append(f"sf-label-{sanitized_label}")
+        sf_labels = detailed_data.get("labels", [])
+        if sf_labels:
+            # Add SF labels, sanitizing them for GitHub
+            for label in sf_labels:
+                if label:
+                    # Sanitize label (lowercase, replace spaces with hyphens)
+                    sanitized_label = str(label).lower().replace(" ", "-")
+                    labels.append(f"sf-label-{sanitized_label}")
         
         # Extract comments from discussion thread
         comments = []
-        if detailed_ticket:
-            ticket_data = detailed_ticket.get("ticket", {})
-            discussion_thread = ticket_data.get("discussion_thread", {})
-            posts = discussion_thread.get("posts", [])
+        discussion_thread = detailed_data.get("discussion_thread", {})
+        posts = discussion_thread.get("posts", [])
+        
+        for post in posts:
+            author = post.get("author", "unknown")
+            timestamp = post.get("timestamp", "")
+            text = post.get("text", "")
             
-            for post in posts:
-                author = post.get("author", "unknown")
-                timestamp = post.get("timestamp", "")
-                text = post.get("text", "")
-                
-                if text:  # Only add non-empty comments
-                    comment_parts = [
-                        f"**Comment by {author}** *(SourceForge)*",
-                        f"**Date:** {timestamp}",
-                        "",
-                        text
-                    ]
-                    comments.append("\n".join(comment_parts))
+            if text:  # Only add non-empty comments
+                comment_parts = [
+                    f"**Comment by {author}** *(SourceForge)*",
+                    f"**Date:** {timestamp}",
+                    "",
+                    text
+                ]
+                comments.append("\n".join(comment_parts))
         
         return {
             "title": title,
