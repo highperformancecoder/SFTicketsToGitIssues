@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 import requests
 
@@ -263,9 +264,17 @@ class TicketMigrator:
                 ""
             ])
             for att in attachments:
-                filename = att.get("filename", "attachment")
                 url = att.get("url", "")
                 if url:
+                    # Extract filename from URL since SourceForge doesn't provide filename attribute
+                    # Use pathlib to handle URL path parsing
+                    try:
+                        # Parse the URL path to get the filename
+                        url_path = Path(url.split('?')[0])  # Remove query params if any
+                        filename = url_path.name if url_path.name else "attachment"
+                    except Exception:
+                        filename = "attachment"
+                    
                     # Handle both full URLs and relative paths
                     # SourceForge might return full URLs or paths starting with /
                     if url.startswith("http://") or url.startswith("https://"):
@@ -285,7 +294,8 @@ class TicketMigrator:
                         # Link to non-image file with filename as link text
                         body_parts.append(f"- [{filename}]({full_url})")
                 else:
-                    body_parts.append(f"- {filename}")
+                    # No URL provided, skip this attachment
+                    pass
         
         body = "\n".join(body_parts)
         
