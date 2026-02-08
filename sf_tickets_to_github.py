@@ -16,6 +16,10 @@ from typing import Dict, List, Optional
 import requests
 
 
+# Image file extensions that should be embedded in the issue body
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp'}
+
+
 class SourceForgeTicketsFetcher:
     """Fetches tickets from SourceForge project."""
     
@@ -274,7 +278,7 @@ class TicketMigrator:
                     
                     # Check if this is an image file - embed it, otherwise link it
                     lower_filename = filename.lower()
-                    if any(lower_filename.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp']):
+                    if any(lower_filename.endswith(ext) for ext in IMAGE_EXTENSIONS):
                         # Embed image
                         body_parts.append(f"![{filename}]({full_url})")
                     else:
