@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 import requests
 
 
@@ -267,12 +268,16 @@ class TicketMigrator:
                 url = att.get("url", "")
                 if url:
                     # Extract filename from URL since SourceForge doesn't provide filename attribute
-                    # Use pathlib to handle URL path parsing
+                    # Use urlparse and Path for robust cross-platform URL handling
                     try:
-                        # Parse the URL path to get the filename
-                        url_path = Path(url.split('?')[0])  # Remove query params if any
-                        filename = url_path.name if url_path.name else "attachment"
-                    except Exception:
+                        # Parse the URL to get the path component
+                        parsed = urlparse(url)
+                        url_path = parsed.path
+                        # Extract filename from the path
+                        filename = Path(url_path).name if url_path else "attachment"
+                        if not filename:
+                            filename = "attachment"
+                    except (ValueError, AttributeError):
                         filename = "attachment"
                     
                     # Handle both full URLs and relative paths
