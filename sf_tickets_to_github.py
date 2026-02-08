@@ -127,7 +127,7 @@ class GitHubIssuesCreator:
         self.token = token
         self.base_url = f"https://api.github.com/repos/{owner}/{repo}"
         self.headers = {
-            "Authorization": f"token {token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json"
         }
         self.logger = logging.getLogger(__name__)
