@@ -9,7 +9,8 @@ Python script to automate the migration of SourceForge tickets to GitHub Issues.
 - Preserves original ticket metadata (reporter, dates, status)
 - **Migrates discussion threads and comments as GitHub issue comments**
 - **Includes attachments with links to original SourceForge files**
-- **Imports SourceForge labels/tags as GitHub labels with `sf-label-` prefix**
+- **Embeds image attachments directly in GitHub issues**
+- **Imports SourceForge labels/tags as GitHub labels (preserving original names)**
 - Supports filtering by ticket status (open, closed, or all)
 - Includes dry-run mode for testing
 - Configurable via command-line arguments or JSON config file
@@ -131,8 +132,8 @@ python sf_tickets_to_github.py --config config.json --verbose
 
 3. **Converting Format**: Each SourceForge ticket is converted to GitHub issue format:
    - Title: `[SF#<ticket_num>] <original_summary>`
-   - Body: Contains metadata (reporter, dates, status), original description, and attachment links
-   - Labels: Automatically tagged with `migrated-from-sourceforge`, status labels (`sf-status-*`), and SourceForge tags/labels (`sf-label-*`)
+   - Body: Contains metadata (reporter, dates, status), original description, embedded images, and attachment links
+   - Labels: Automatically tagged with `migrated-from-sourceforge`, status labels (`sf-status-*`), and SourceForge tags/labels (preserving original names)
    - Comments: Discussion thread posts are added as GitHub issue comments
 
 4. **Creating Issues**: Issues are created in the GitHub repository using the GitHub API.

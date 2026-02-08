@@ -259,7 +259,7 @@ class TicketMigrator:
                 ""
             ])
             for att in attachments:
-                filename = att.get("filename", "unknown")
+                filename = att.get("filename", "attachment")
                 url = att.get("url", "")
                 if url:
                     # Handle both full URLs and relative paths
@@ -271,7 +271,15 @@ class TicketMigrator:
                     else:
                         # Relative path without leading slash
                         full_url = f"https://sourceforge.net/{url}"
-                    body_parts.append(f"- [{filename}]({full_url})")
+                    
+                    # Check if this is an image file - embed it, otherwise link it
+                    lower_filename = filename.lower()
+                    if any(lower_filename.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp']):
+                        # Embed image
+                        body_parts.append(f"![{filename}]({full_url})")
+                    else:
+                        # Link to non-image file with filename as link text
+                        body_parts.append(f"- [{filename}]({full_url})")
                 else:
                     body_parts.append(f"- {filename}")
         
@@ -286,15 +294,15 @@ class TicketMigrator:
             sanitized_status = status.lower().replace(" ", "-")
             labels.append(f"sf-status-{sanitized_status}")
         
-        # Add SourceForge labels/tags if available
+        # Add SourceForge labels/tags if available (without sf-label- prefix)
         sf_labels = detailed_data.get("labels", [])
         if sf_labels:
-            # Add SF labels, sanitizing them for GitHub
+            # Add SF labels as-is, only sanitizing them for GitHub compatibility
             for label in sf_labels:
                 if label:
                     # Sanitize label (lowercase, replace spaces with hyphens)
                     sanitized_label = str(label).lower().replace(" ", "-")
-                    labels.append(f"sf-label-{sanitized_label}")
+                    labels.append(sanitized_label)
         
         # Extract comments from discussion thread
         comments = []
