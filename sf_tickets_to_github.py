@@ -217,11 +217,17 @@ class TicketMigrator:
         """
         ticket_num = ticket.get("ticket_num", "")
         summary = ticket.get("summary", "No summary")
-        description = ticket.get("description", "")
         status = ticket.get("status", "")
         created_date = ticket.get("created_date", "")
         mod_date = ticket.get("mod_date", "")
         reporter = ticket.get("reported_by", "unknown")
+        
+        # Get description from detailed ticket if available (it has the full text)
+        # Otherwise fall back to basic ticket description
+        description = ticket.get("description", "")
+        if detailed_ticket:
+            ticket_data = detailed_ticket.get("ticket", {})
+            description = ticket_data.get("description", description)
         
         # Build issue title
         title = f"[SF#{ticket_num}] {summary}"
@@ -260,18 +266,41 @@ class TicketMigrator:
                     filename = att.get("filename", "unknown")
                     url = att.get("url", "")
                     if url:
-                        # Build full URL for attachment
-                        full_url = f"https://sourceforge.net{url}"
+                        # Handle both full URLs and relative paths
+                        # SourceForge might return full URLs or paths starting with /
+                        if url.startswith("http://") or url.startswith("https://"):
+                            full_url = url
+                        elif url.startswith("/"):
+                            full_url = f"https://sourceforge.net{url}"
+                        else:
+                            # Relative path without leading slash
+                            full_url = f"https://sourceforge.net/{url}"
                         body_parts.append(f"- [{filename}]({full_url})")
                     else:
                         body_parts.append(f"- {filename}")
         
         body = "\n".join(body_parts)
         
-        # Determine labels
+        # Determine labels - start with migration label
         labels = ["migrated-from-sourceforge"]
+        
+        # Add status label with sanitized status value
         if status:
-            labels.append(f"sf-status-{status}")
+            # Sanitize status for label (lowercase, replace spaces with hyphens)
+            sanitized_status = status.lower().replace(" ", "-")
+            labels.append(f"sf-status-{sanitized_status}")
+        
+        # Add SourceForge labels/tags if available
+        if detailed_ticket:
+            ticket_data = detailed_ticket.get("ticket", {})
+            sf_labels = ticket_data.get("labels", [])
+            if sf_labels:
+                # Add SF labels, sanitizing them for GitHub
+                for label in sf_labels:
+                    if label:
+                        # Sanitize label (lowercase, replace spaces with hyphens)
+                        sanitized_label = str(label).lower().replace(" ", "-")
+                        labels.append(f"sf-label-{sanitized_label}")
         
         # Extract comments from discussion thread
         comments = []
