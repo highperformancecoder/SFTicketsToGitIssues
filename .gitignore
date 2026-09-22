@@ -39,6 +39,9 @@ env/
 # Configuration files with secrets
 config.json
 
+# Migration progress state (run-specific)
+migration_state.json
+
 # OS
 .DS_Store
 Thumbs.db

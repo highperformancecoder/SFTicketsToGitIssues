@@ -22,6 +22,14 @@ import requests
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp'}
 
 
+class MigrationAborted(Exception):
+    """Raised when a GitHub API call fails unrecoverably.
+
+    Migration progress is saved before this propagates, so the run can be
+    resumed later from the ticket that failed.
+    """
+
+
 class SourceForgeTicketsFetcher:
     """Fetches tickets from SourceForge project."""
     
@@ -113,102 +121,197 @@ class SourceForgeTicketsFetcher:
 class GitHubIssuesCreator:
     """Creates issues in GitHub repository."""
     
-    def __init__(self, owner: str, repo: str, token: str):
+    def __init__(self, owner: str, repo: str, token: str, max_retries: int = 5):
         """
         Initialize the GitHub issues creator.
-        
+
         Args:
             owner: GitHub repository owner
             repo: GitHub repository name
             token: GitHub personal access token
+            max_retries: Maximum number of times to wait out a rate limit
+                response before giving up
         """
         self.owner = owner
         self.repo = repo
         self.token = token
+        self.max_retries = max_retries
         self.base_url = f"https://api.github.com/repos/{owner}/{repo}"
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json"
         }
         self.logger = logging.getLogger(__name__)
-    
-    def create_issue(self, title: str, body: str, labels: Optional[List[str]] = None) -> Optional[Dict]:
+
+    def _rate_limit_wait_seconds(self, response: "requests.Response") -> Optional[float]:
+        """Return how long to wait before retrying a rate-limited response, or None if it isn't one."""
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(float(retry_after), 1.0)
+            except ValueError:
+                pass
+
+        if response.headers.get("X-RateLimit-Remaining") == "0":
+            reset = response.headers.get("X-RateLimit-Reset")
+            if reset:
+                try:
+                    return max(float(reset) - time.time(), 1.0)
+                except ValueError:
+                    pass
+
+        # GitHub's secondary/abuse rate limiter doesn't always send the headers above.
+        if response.status_code in (403, 429) and "rate limit" in response.text.lower():
+            return 60.0
+
+        return None
+
+    def _request(self, method: str, url: str, json_data: Optional[Dict] = None) -> "requests.Response":
+        """
+        Perform a GitHub API request, automatically waiting out rate limits.
+
+        Raises:
+            MigrationAborted: if the request fails and cannot be recovered from
+                (rate limit retries exhausted, or any other API/network error).
+        """
+        attempt = 0
+        while True:
+            try:
+                response = requests.request(method, url, headers=self.headers, json=json_data, timeout=30)
+            except requests.exceptions.RequestException as e:
+                raise MigrationAborted(f"Network error calling GitHub API: {e}") from e
+
+            if response.status_code in (403, 429):
+                wait = self._rate_limit_wait_seconds(response)
+                if wait is not None and attempt < self.max_retries:
+                    attempt += 1
+                    self.logger.warning(
+                        f"GitHub rate limit hit (status {response.status_code}); "
+                        f"waiting {wait:.0f}s before retry {attempt}/{self.max_retries}"
+                    )
+                    time.sleep(wait)
+                    continue
+                raise MigrationAborted(
+                    f"GitHub rate limit exceeded and retry budget used up "
+                    f"(status {response.status_code}): {response.text}"
+                )
+
+            if not response.ok:
+                raise MigrationAborted(
+                    f"GitHub API error {response.status_code} for {method} {url}: {response.text}"
+                )
+
+            return response
+
+    def create_issue(self, title: str, body: str, labels: Optional[List[str]] = None) -> Dict:
         """
         Create a GitHub issue.
-        
+
         Args:
             title: Issue title
             body: Issue body/description
             labels: List of labels to apply
-            
+
         Returns:
-            Created issue data or None if failed
+            Created issue data
+
+        Raises:
+            MigrationAborted: if the issue could not be created
         """
         url = f"{self.base_url}/issues"
-        
+
         data = {
             "title": title,
             "body": body
         }
-        
+
         if labels:
             data["labels"] = labels
-        
-        try:
-            response = requests.post(url, headers=self.headers, json=data, timeout=30)
-            response.raise_for_status()
-            issue = response.json()
-            self.logger.info(f"Created issue #{issue['number']}: {title}")
-            return issue
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error creating issue: {e}")
-            if hasattr(e, 'response') and hasattr(e.response, 'text'):
-                self.logger.error(f"Response: {e.response.text}")
-            return None
-    
-    def add_comment(self, issue_number: int, comment: str) -> bool:
+
+        response = self._request("POST", url, data)
+        issue = response.json()
+        self.logger.info(f"Created issue #{issue['number']}: {title}")
+        return issue
+
+    def add_comment(self, issue_number: int, comment: str) -> None:
         """
         Add a comment to a GitHub issue.
-        
+
         Args:
             issue_number: Issue number
             comment: Comment text
-            
-        Returns:
-            True if successful, False otherwise
+
+        Raises:
+            MigrationAborted: if the comment could not be added
         """
         url = f"{self.base_url}/issues/{issue_number}/comments"
-        
+
         data = {"body": comment}
-        
-        try:
-            response = requests.post(url, headers=self.headers, json=data, timeout=30)
-            response.raise_for_status()
-            self.logger.info(f"Added comment to issue #{issue_number}")
-            return True
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error adding comment to issue #{issue_number}: {e}")
-            return False
+
+        self._request("POST", url, data)
+        self.logger.info(f"Added comment to issue #{issue_number}")
 
 
 class TicketMigrator:
     """Migrates tickets from SourceForge to GitHub."""
     
-    def __init__(self, sf_project: str, sf_tracker: str, gh_owner: str, 
-                 gh_repo: str, gh_token: str):
+    def __init__(self, sf_project: str, sf_tracker: str, gh_owner: str,
+                 gh_repo: str, gh_token: str, issue_delay: float = 2.0,
+                 comment_delay: float = 1.0, max_retries: int = 5,
+                 state_file: Optional[str] = "migration_state.json"):
         """
         Initialize the ticket migrator.
-        
+
         Args:
             sf_project: SourceForge project name
             sf_tracker: SourceForge tracker name
             gh_owner: GitHub repository owner
             gh_repo: GitHub repository name
             gh_token: GitHub personal access token
+            issue_delay: Seconds to wait after creating each issue
+            comment_delay: Seconds to wait after adding each comment
+            max_retries: Maximum number of times to wait out a GitHub rate limit
+            state_file: Path to a file tracking which tickets have already been
+                migrated, so an interrupted run can be resumed. Pass None to
+                disable resume tracking.
         """
         self.sf_fetcher = SourceForgeTicketsFetcher(sf_project, sf_tracker)
-        self.gh_creator = GitHubIssuesCreator(gh_owner, gh_repo, gh_token)
+        self.gh_creator = GitHubIssuesCreator(gh_owner, gh_repo, gh_token, max_retries=max_retries)
+        self.issue_delay = issue_delay
+        self.comment_delay = comment_delay
+        self.state_file = state_file
         self.logger = logging.getLogger(__name__)
+        self.completed_tickets = self._load_state()
+
+    def _load_state(self) -> set:
+        """Load the set of ticket numbers already migrated in a previous run."""
+        if self.state_file and os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, "r") as f:
+                    data = json.load(f)
+                completed = set(data.get("completed_tickets", []))
+                if completed:
+                    self.logger.info(
+                        f"Resuming from state file '{self.state_file}': "
+                        f"{len(completed)} tickets already migrated"
+                    )
+                return completed
+            except (json.JSONDecodeError, OSError) as e:
+                self.logger.warning(f"Could not load state file '{self.state_file}': {e}")
+        return set()
+
+    def _mark_completed(self, ticket_num) -> None:
+        """Record a ticket as migrated and persist progress to the state file."""
+        self.completed_tickets.add(ticket_num)
+        if not self.state_file:
+            return
+        try:
+            tmp_path = f"{self.state_file}.tmp"
+            with open(tmp_path, "w") as f:
+                json.dump({"completed_tickets": sorted(self.completed_tickets, key=str)}, f, indent=2)
+            os.replace(tmp_path, self.state_file)
+        except OSError as e:
+            self.logger.warning(f"Could not save state file '{self.state_file}': {e}")
     
     def convert_ticket_to_issue(self, ticket: Dict, detailed_ticket: Optional[Dict] = None) -> Dict:
         """
@@ -373,11 +476,17 @@ class TicketMigrator:
         self.logger.info(f"Migrating {len(tickets)} tickets")
         
         success_count = 0
-        
+
         for i, ticket in enumerate(tickets, 1):
             ticket_num = ticket.get("ticket_num", "unknown")
+
+            if ticket_num in self.completed_tickets:
+                self.logger.info(f"Skipping ticket {i}/{len(tickets)}: #{ticket_num} (already migrated)")
+                success_count += 1
+                continue
+
             self.logger.info(f"Processing ticket {i}/{len(tickets)}: #{ticket_num}")
-            
+
             # Fetch detailed ticket information
             detailed_ticket = None
             if ticket_num != "unknown":
@@ -385,40 +494,47 @@ class TicketMigrator:
                 detailed_ticket = self.sf_fetcher.fetch_ticket_details(ticket_num)
                 if detailed_ticket:
                     time.sleep(1)  # Rate limiting for detail fetch
-            
+
             # Convert ticket to issue format
             issue_data = self.convert_ticket_to_issue(ticket, detailed_ticket)
-            
+
             if dry_run:
                 self.logger.info(f"[DRY RUN] Would create issue: {issue_data['title']}")
                 if issue_data.get("comments"):
                     self.logger.info(f"[DRY RUN] Would add {len(issue_data['comments'])} comments")
                 success_count += 1
-            else:
+                continue
+
+            try:
                 # Create the issue
                 issue = self.gh_creator.create_issue(
                     title=issue_data["title"],
                     body=issue_data["body"],
                     labels=issue_data["labels"]
                 )
-                
-                if issue:
-                    issue_number = issue.get("number")
-                    
-                    # Add comments if any
-                    comments = issue_data.get("comments", [])
-                    if comments and issue_number:
-                        self.logger.info(f"Adding {len(comments)} comments to issue #{issue_number}")
-                        for comment in comments:
-                            self.gh_creator.add_comment(issue_number, comment)
-                            time.sleep(1)  # Rate limiting for comments
-                    
-                    success_count += 1
-                    # Rate limiting
-                    time.sleep(2)
-                else:
-                    self.logger.error(f"Failed to create issue for ticket #{ticket_num}")
-        
+
+                issue_number = issue.get("number")
+
+                # Add comments if any
+                comments = issue_data.get("comments", [])
+                if comments and issue_number:
+                    self.logger.info(f"Adding {len(comments)} comments to issue #{issue_number}")
+                    for comment in comments:
+                        self.gh_creator.add_comment(issue_number, comment)
+                        time.sleep(self.comment_delay)
+
+                success_count += 1
+                self._mark_completed(ticket_num)
+                time.sleep(self.issue_delay)
+            except MigrationAborted as e:
+                self.logger.error(f"Migration stopped while processing ticket #{ticket_num}: {e}")
+                if self.state_file:
+                    self.logger.error(
+                        f"Progress has been saved to '{self.state_file}'. Fix the issue above "
+                        f"and re-run the same command to resume from this ticket."
+                    )
+                raise
+
         self.logger.info(f"Migration complete: {success_count}/{len(tickets)} tickets migrated")
         return success_count
 
@@ -471,9 +587,18 @@ Examples:
                        choices=["open", "closed", "all"],
                        help="Status of tickets to migrate (default: open)")
     parser.add_argument("--limit", type=int, help="Maximum number of tickets to migrate")
-    parser.add_argument("--dry-run", action="store_true", 
+    parser.add_argument("--dry-run", action="store_true",
                        help="Don't actually create issues, just show what would be done")
-    
+    parser.add_argument("--issue-delay", type=float,
+                       help="Seconds to wait after creating each GitHub issue (default: 2.0)")
+    parser.add_argument("--comment-delay", type=float,
+                       help="Seconds to wait after adding each GitHub comment (default: 1.0)")
+    parser.add_argument("--max-retries", type=int,
+                       help="Max times to wait out a GitHub rate limit before aborting (default: 5)")
+    parser.add_argument("--state-file",
+                       help="Path to the file used to track migration progress for resuming "
+                            "after an interruption (default: migration_state.json)")
+
     # Logging options
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     
@@ -498,7 +623,11 @@ Examples:
     gh_owner = args.gh_owner or config.get("gh_owner")
     gh_repo = args.gh_repo or config.get("gh_repo")
     gh_token = args.gh_token or config.get("gh_token") or os.environ.get("GITHUB_TOKEN")
-    
+    issue_delay = args.issue_delay if args.issue_delay is not None else config.get("issue_delay", 2.0)
+    comment_delay = args.comment_delay if args.comment_delay is not None else config.get("comment_delay", 1.0)
+    max_retries = args.max_retries if args.max_retries is not None else config.get("max_retries", 5)
+    state_file = args.state_file or config.get("state_file", "migration_state.json")
+
     # Validate required parameters
     if not sf_project:
         logger.error("SourceForge project name is required (--sf-project or config file)")
@@ -514,16 +643,23 @@ Examples:
         sys.exit(1)
     
     # Create migrator and run migration
-    migrator = TicketMigrator(sf_project, sf_tracker, gh_owner, gh_repo, gh_token)
-    
-    success_count = migrator.migrate_tickets(
-        status=args.status,
-        limit=args.limit,
-        dry_run=args.dry_run
+    migrator = TicketMigrator(
+        sf_project, sf_tracker, gh_owner, gh_repo, gh_token,
+        issue_delay=issue_delay, comment_delay=comment_delay,
+        max_retries=max_retries, state_file=state_file
     )
-    
+
+    try:
+        success_count = migrator.migrate_tickets(
+            status=args.status,
+            limit=args.limit,
+            dry_run=args.dry_run
+        )
+    except MigrationAborted:
+        return 2
+
     logger.info(f"Migration completed: {success_count} tickets migrated")
-    
+
     return 0
 
 

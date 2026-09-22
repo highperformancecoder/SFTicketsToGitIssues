@@ -4,5 +4,9 @@
   "gh_owner": "your-github-username",
   "gh_repo": "your-repository-name",
   "_comment_gh_token": "Do NOT put a real GitHub token here. Provide it via an environment variable or command line option instead, and do not commit secrets to version control.",
-  "gh_token": "your-github-personal-access-token"
+  "gh_token": "your-github-personal-access-token",
+  "issue_delay": 2.0,
+  "comment_delay": 1.0,
+  "max_retries": 5,
+  "state_file": "migration_state.json"
 }
